@@ -1,127 +1,136 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getToken } from 'next-auth/jwt';
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
+import { getToken } from "next-auth/jwt";
+import { logger } from "@/lib/logger";
+import { config } from "@/lib/config";
 
-const RATE_LIMIT_MAP = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute
-const RATE_LIMIT_MAX = 100; // requests per window
+const log = logger.child("middleware");
 
 const PUBLIC_PATHS = [
-  '/api/auth/register',
-  '/api/auth/signin',
-  '/api/auth/csrf',
-  '/api/auth/session',
-  '/api/auth/providers',
-  '/api/webhooks/',
-  '/api/dashboard/stats',
+  "/",
+  "/auth/login",
+  "/auth/register",
+  "/auth/forgot-password",
+  "/auth/reset-password",
+  "/auth/verify",
+  "/auth/error",
+  "/api/auth",
+  "/api/health",
+  "/api/webhooks",
+  "/api/public",
+];
+
+const STATIC_PATHS = [
+  "/_next",
+  "/favicon.ico",
+  "/robots.txt",
+  "/sitemap.xml",
+  "/images",
+  "/fonts",
+  "/icons",
 ];
 
 function isPublicPath(pathname: string): boolean {
-  return PUBLIC_PATHS.some((p) => pathname.startsWith(p));
+  return PUBLIC_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(path + "/")
+  );
 }
 
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const record = RATE_LIMIT_MAP.get(ip);
-
-  if (!record || now > record.resetAt) {
-    RATE_LIMIT_MAP.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW });
-    return true;
-  }
-
-  if (record.count >= RATE_LIMIT_MAX) {
-    return false;
-  }
-
-  record.count++;
-  return true;
+function isStaticPath(pathname: string): boolean {
+  return STATIC_PATHS.some(
+    (path) => pathname === path || pathname.startsWith(path + "/")
+  );
 }
 
 function generateRequestId(): string {
   return `req_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
 }
 
-function getCorsHeaders(origin: string | null): Record<string, string> {
-  const allowedOrigins = (process.env.CORS_ORIGINS || '').split(',').filter(Boolean);
-  const isAllowed = !origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin);
-
-  return {
-    'Access-Control-Allow-Origin': isAllowed ? (origin || '*') : allowedOrigins[0] || '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-org-id, x-request-id',
-    'Access-Control-Allow-Credentials': 'true',
-    'Access-Control-Max-Age': '86400',
-  };
-}
-
-export async function middleware(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+export async function middleware(request: NextRequest) {
+  const startTime = performance.now();
   const requestId = generateRequestId();
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0] || req.ip || 'unknown';
+  const { pathname } = request.nextUrl;
 
-  // CORS preflight
-  if (req.method === 'OPTIONS') {
-    return new NextResponse(null, {
-      status: 204,
-      headers: getCorsHeaders(req.headers.get('origin')),
-    });
+  if (isStaticPath(pathname)) {
+    return NextResponse.next();
   }
 
-  // Rate limiting
-  if (!checkRateLimit(ip)) {
-    return NextResponse.json(
-      { success: false, error: 'Too many requests. Please try again later.' },
-      {
-        status: 429,
-        headers: {
-          'Retry-After': '60',
-          'X-Request-Id': requestId,
-          ...getCorsHeaders(req.headers.get('origin')),
-        },
-      }
+  const response = NextResponse.next();
+
+  response.headers.set("X-Request-Id", requestId);
+  response.headers.set("X-Pathname", pathname);
+
+  const ip =
+    request.headers.get("x-forwarded-for")?.split(",")[0] ||
+    request.headers.get("x-real-ip") ||
+    "unknown";
+
+  const userAgent = request.headers.get("user-agent") || "unknown";
+
+  if (pathname.startsWith("/api/")) {
+    response.headers.set("X-Api-Version", "1.0");
+    response.headers.set(
+      "Access-Control-Allow-Origin",
+      config.security.allowedOrigins.includes("*")
+        ? "*"
+        : config.security.allowedOrigins[0]
     );
-  }
+    response.headers.set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    response.headers.set(
+      "Access-Control-Allow-Headers",
+      "Content-Type, Authorization, X-Request-Id, X-Api-Key"
+    );
+    response.headers.set("Access-Control-Max-Age", "86400");
 
-  // Skip auth for public paths
-  if (isPublicPath(pathname)) {
-    const response = NextResponse.next();
-    response.headers.set('X-Request-Id', requestId);
-    Object.entries(getCorsHeaders(req.headers.get('origin'))).forEach(([key, value]) => {
-      response.headers.set(key, value);
-    });
-    return response;
-  }
-
-  // Auth check for API routes
-  if (pathname.startsWith('/api/')) {
-    const token = await getToken({
-      req,
-      secret: process.env.NEXTAUTH_SECRET,
-    });
-
-    if (!token) {
-      return NextResponse.json(
-        { success: false, error: 'Authentication required' },
-        {
-          status: 401,
-          headers: {
-            'X-Request-Id': requestId,
-            ...getCorsHeaders(req.headers.get('origin')),
-          },
-        }
-      );
+    if (request.method === "OPTIONS") {
+      return new NextResponse(null, { status: 204, headers: response.headers });
     }
   }
 
-  // Continue to route
-  const response = NextResponse.next();
-  response.headers.set('X-Request-Id', requestId);
-  Object.entries(getCorsHeaders(req.headers.get('origin'))).forEach(([key, value]) => {
-    response.headers.set(key, value);
+  if (pathname.startsWith("/api/auth")) {
+    return response;
+  }
+
+  if (!isPublicPath(pathname)) {
+    const token = await getToken({
+      req: request,
+      secret: config.auth.secret,
+    });
+
+    if (!token) {
+      if (pathname.startsWith("/api/")) {
+        return NextResponse.json(
+          { success: false, error: { code: "UNAUTHORIZED", message: "Authentication required" } },
+          { status: 401 }
+        );
+      }
+
+      const loginUrl = new URL("/auth/login", request.url);
+      loginUrl.searchParams.set("callbackUrl", pathname);
+      return NextResponse.redirect(loginUrl);
+    }
+
+    if (token.orgId) {
+      response.headers.set("X-User-Id", token.id);
+      response.headers.set("X-Org-Id", token.orgId);
+      response.headers.set("X-User-Role", token.role);
+    }
+  }
+
+  const duration = Math.round(performance.now() - startTime);
+  log.debug("Request processed", {
+    requestId,
+    pathname,
+    method: request.method,
+    ip,
+    duration,
   });
 
   return response;
 }
 
 export const config = {
-  matcher: ['/api/:path*'],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico).*)",
+  ],
 };
