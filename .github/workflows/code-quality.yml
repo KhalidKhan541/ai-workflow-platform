@@ -1,0 +1,100 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  formatting:
+    name: Prettier
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npx prettier --check "src/**/*.{ts,tsx,js,jsx,json,css,md}"
+
+  eslint:
+    name: ESLint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run lint -- --format=json --output-file=eslint-results.json
+      - name: Annotate ESLint results
+        if: always()
+        run: |
+          if [ -f eslint-results.json ]; then
+            npx eslint-junit-formatter eslint-results.json > eslint-junit.xml || true
+          fi
+
+  typescript-strict:
+    name: TypeScript Strict
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx tsc --noEmit --strict
+
+  bundle-size:
+    name: Bundle Size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run build
+      - name: Analyze bundle
+        run: |
+          echo "=== Build Output Size ==="
+          du -sh .next/ || true
+          echo ""
+          echo "=== Static Assets ==="
+          du -sh .next/static/ || true
+          echo ""
+          echo "=== Page Sizes ==="
+          find .next/server/app -name "*.js" -exec du -h {} \; 2>/dev/null | sort -rh | head -20 || true
+          echo ""
+          echo "=== Total Bundle ==="
+          du -sh .next/ 2>/dev/null | awk '{print $1 " total build size"}'
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - name: Run npm audit
+        run: npm audit --audit-level=high
+        continue-on-error: true
+      - name: Check for secrets in code
+        run: |
+          echo "Scanning for potential secrets..."
+          grep -rn "password\|secret\|api_key\|token" --include="*.ts" --include="*.tsx" --include="*.js" src/ | \
+            grep -v "node_modules" | \
+            grep -v ".env" | \
+            grep -v "process.env" | \
+            grep -v "type\|interface\|import\|export\|//\|/\*\|\*/" || echo "No obvious secrets found"
