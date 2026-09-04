@@ -1,61 +1,95 @@
-import React from 'react';
+import * as React from "react";
+import { cn } from "@/lib/utils";
 
-export interface CardProps {
-  children: React.ReactNode;
-  className?: string;
-  padding?: 'none' | 'sm' | 'md' | 'lg';
-  hover?: boolean;
-}
-
-const paddingClasses: Record<string, string> = {
-  none: '',
-  sm: 'p-4',
-  md: 'p-6',
-  lg: 'p-8',
-};
-
-export function Card({ children, className = '', padding = 'md', hover = false }: CardProps) {
-  return (
+const Card = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
     <div
-      className={`bg-white rounded-lg border border-gray-200 shadow-sm ${paddingClasses[padding]} ${hover ? 'hover:shadow-md transition-shadow cursor-pointer' : ''} ${className}`}
-    >
-      {children}
-    </div>
-  );
+      ref={ref}
+      className={cn("rounded-lg border bg-card text-card-foreground shadow-sm", className)}
+      {...props}
+    />
+  )
+);
+Card.displayName = "Card";
+
+const CardHeader = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div ref={ref} className={cn("flex flex-col space-y-1.5 p-6", className)} {...props} />
+  )
+);
+CardHeader.displayName = "CardHeader";
+
+const CardTitle = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLHeadingElement>>(
+  ({ className, ...props }, ref) => (
+    <h3
+      ref={ref}
+      className={cn("text-2xl font-semibold leading-none tracking-tight", className)}
+      {...props}
+    />
+  )
+);
+CardTitle.displayName = "CardTitle";
+
+const CardDescription = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<HTMLParagraphElement>>(
+  ({ className, ...props }, ref) => (
+    <p ref={ref} className={cn("text-sm text-muted-foreground", className)} {...props} />
+  )
+);
+CardDescription.displayName = "CardDescription";
+
+const CardContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div ref={ref} className={cn("p-6 pt-0", className)} {...props} />
+  )
+);
+CardContent.displayName = "CardContent";
+
+const CardFooter = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
+  ({ className, ...props }, ref) => (
+    <div ref={ref} className={cn("flex items-center p-6 pt-0", className)} {...props} />
+  )
+);
+CardFooter.displayName = "CardFooter";
+
+interface StatCardProps {
+  title: string;
+  value: string | number;
+  description?: string;
+  icon?: React.ReactNode;
+  trend?: { value: number; label?: string; isPositive: boolean };
+  className?: string;
 }
 
-export function CardHeader({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+function StatCard({ title, value, description, icon, trend, className }: StatCardProps) {
   return (
-    <div className={`border-b border-gray-200 pb-4 mb-4 ${className}`}>
-      {children}
-    </div>
+    <Card className={cn("relative overflow-hidden", className)}>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+        <CardTitle className="text-sm font-medium">{title}</CardTitle>
+        {icon && <div className="text-muted-foreground">{icon}</div>}
+      </CardHeader>
+      <CardContent>
+        <div className="text-2xl font-bold">{value}</div>
+        {trend && (
+          <div className="flex items-center gap-1 mt-1">
+            <span
+              className={cn(
+                "text-xs font-medium",
+                trend.isPositive ? "text-success" : "text-destructive"
+              )}
+            >
+              {trend.isPositive ? "+" : ""}{trend.value}%
+            </span>
+            {trend.label && (
+              <span className="text-xs text-muted-foreground">{trend.label}</span>
+            )}
+          </div>
+        )}
+        {description && (
+          <p className="text-xs text-muted-foreground mt-1">{description}</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
-export function CardTitle({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <h3 className={`text-lg font-semibold text-gray-900 ${className}`}>
-      {children}
-    </h3>
-  );
-}
-
-export function CardDescription({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <p className={`text-sm text-gray-500 mt-1 ${className}`}>
-      {children}
-    </p>
-  );
-}
-
-export function CardContent({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return <div className={className}>{children}</div>;
-}
-
-export function CardFooter({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div className={`border-t border-gray-200 pt-4 mt-4 flex items-center ${className}`}>
-      {children}
-    </div>
-  );
-}
+export { Card, CardHeader, CardFooter, CardTitle, CardDescription, CardContent, StatCard };

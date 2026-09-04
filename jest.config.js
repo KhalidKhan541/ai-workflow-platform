@@ -1,36 +1,32 @@
-/** @type {import('ts-jest').JestConfigWithTsJest} */
-module.exports = {
-  preset: 'ts-jest',
-  testEnvironment: 'jsdom',
-  roots: ['<rootDir>/src'],
-  testMatch: ['**/__tests__/**/*.test.{ts,tsx}'],
+const nextJest = require("next/jest");
+
+const createJestConfig = nextJest({
+  dir: "./",
+});
+
+/** @type {import('jest').Config} */
+const customJestConfig = {
+  testEnvironment: "jsdom",
+  setupFilesAfterSetup: ["<rootDir>/jest.setup.ts"],
   moduleNameMapper: {
-    '^@/(.*)$': '<rootDir>/src/$1',
+    "^@/(.*)$": "<rootDir>/src/$1",
   },
-  transform: {
-    '^.+\\.tsx?$': [
-      'ts-jest',
-      {
-        tsconfig: 'tsconfig.json',
-        jsx: 'react-jsx',
-      },
-    ],
-  },
-  setupFilesAfterSetup: ['<rootDir>/jest.setup.js'],
-  coverageDirectory: 'coverage',
+  testPathIgnorePatterns: ["<rootDir>/node_modules/", "<rootDir>/.next/"],
   collectCoverageFrom: [
-    'src/lib/**/*.{ts,tsx}',
-    'src/components/**/*.{ts,tsx}',
-    'src/app/api/**/*.{ts,tsx}',
-    '!**/*.d.ts',
-    '!**/node_modules/**',
+    "src/**/*.{ts,tsx}",
+    "!src/**/*.d.ts",
+    "!src/**/types/**",
+    "!src/**/layout.tsx",
+    "!src/**/page.tsx",
   ],
-  coverageThresholds: {
+  coverageThreshold: {
     global: {
-      branches: 60,
-      functions: 70,
-      lines: 70,
-      statements: 70,
+      branches: 80,
+      functions: 80,
+      lines: 80,
+      statements: 80,
     },
   },
 };
+
+module.exports = createJestConfig(customJestConfig);
