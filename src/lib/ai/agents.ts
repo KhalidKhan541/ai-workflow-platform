@@ -1,160 +1,558 @@
-import type { AgentConfig, AgentStep, AgentResult, ToolCall, ToolResult, ToolDefinition } from '@/types/ai';
+import type {
+  AgentConfig,
+  AgentStep,
+  AgentResult,
+  AIMessage,
+  ToolCall,
+  ToolResult,
+  ToolDefinition,
+  CompletionResponse,
+  MemoryConfig,
+  ReflectionConfig,
+} from "@/types/ai";
+import { AIClient } from "./client";
+import { ToolRegistry, createDefaultToolRegistry } from "./tools";
 
-export interface AgentExecutor {
-  execute(agent: AgentConfig, input: string, tools?: ToolDefinition[]): Promise<AgentResult>;
-}
+// ─── Agent Memory ────────────────────────────────────────────────────────────
 
-export class AgentRunner {
-  private maxSteps: number;
-  private maxTokens: number;
+export class AgentMemory {
+  private messages: AIMessage[] = [];
+  private config: MemoryConfig;
 
-  constructor(maxSteps: number = 10, maxTokens: number = 4096) {
-    this.maxSteps = maxSteps;
-    this.maxTokens = maxTokens;
+  constructor(config: Partial<MemoryConfig> = {}) {
+    this.config = {
+      maxMessages: config.maxMessages ?? 50,
+      maxTokens: config.maxTokens ?? 4000,
+      summaryThreshold: config.summaryThreshold ?? 30,
+    };
   }
 
-  async execute(
-    agent: AgentConfig,
+  add(message: AIMessage): void {
+    this.messages.push(message);
+    if (this.messages.length > this.config.maxMessages) {
+      this.trim();
+    }
+  }
+
+  getMessages(): AIMessage[] {
+    return [...this.messages];
+  }
+
+  getRecent(count: number): AIMessage[] {
+    return this.messages.slice(-count);
+  }
+
+  getContext(): AIMessage[] {
+    return this.messages.filter(
+      (m) => m.role === "system" || m.role === "user" || m.role === "assistant"
+    );
+  }
+
+  async summarize(client: AIClient): Promise<string> {
+    const messages = this.getMessages();
+    if (messages.length < this.config.summaryThreshold) {
+      return "";
+    }
+
+    const conversationText = messages
+      .map((m) => `${m.role}: ${typeof m.content === "string" ? m.content : JSON.stringify(m.content)}`)
+      .join("\n");
+
+    const response = await client.complete({
+      messages: [
+        {
+          role: "system",
+          content: "Summarize the following conversation concisely, capturing key points and decisions.",
+        },
+        {
+          role: "user",
+          content: conversationText,
+        },
+      ],
+      maxTokens: 500,
+      temperature: 0.3,
+    });
+
+    return response.content;
+  }
+
+  clear(): void {
+    this.messages = [];
+  }
+
+  private trim(): void {
+    // Keep first system message and last N messages
+    const systemMessages = this.messages.filter((m) => m.role === "system");
+    const nonSystemMessages = this.messages.filter((m) => m.role !== "system");
+
+    const keepCount = this.config.maxMessages - systemMessages.length;
+    this.messages = [
+      ...systemMessages.slice(0, 1),
+      ...nonSystemMessages.slice(-keepCount),
+    ];
+  }
+
+  getTokenCount(): number {
+    return this.messages.reduce((sum, m) => {
+      const content = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      return sum + Math.ceil(content.length / 4);
+    }, 0);
+  }
+}
+
+// ─── Reflection Engine ───────────────────────────────────────────────────────
+
+export interface ReflectionResult {
+  shouldRetry: boolean;
+  improvedPrompt: string;
+  feedback: string;
+  qualityScore: number;
+}
+
+export class ReflectionEngine {
+  private config: ReflectionConfig;
+
+  constructor(config: Partial<ReflectionConfig> = {}) {
+    this.config = {
+      enabled: config.enabled ?? true,
+      maxIterations: config.maxIterations ?? 3,
+      qualityThreshold: config.qualityThreshold ?? 0.7,
+    };
+  }
+
+  async evaluate(
+    client: AIClient,
+    originalPrompt: string,
+    response: string,
+    criteria?: string
+  ): Promise<ReflectionResult> {
+    const evaluationCriteria = criteria ?? `
+      Evaluate the response on:
+      1. Accuracy - Is the information correct?
+      2. Completeness - Does it fully address the question?
+      3. Clarity - Is it well-organized and easy to understand?
+      4. Relevance - Does it stay on topic?
+      Score each criterion 0-1 and provide an overall score.
+      If the score is below 0.7, explain what needs improvement.
+    `;
+
+    const evalResponse = await client.complete({
+      messages: [
+        {
+          role: "system",
+          content: `You are a quality evaluator. Analyze the response and provide constructive feedback.\n\n${evaluationCriteria}`,
+        },
+        {
+          role: "user",
+          content: `Original prompt: ${originalPrompt}\n\nResponse to evaluate: ${response}`,
+        },
+      ],
+      maxTokens: 1000,
+      temperature: 0.2,
+    });
+
+    const scoreMatch = evalResponse.content.match(/(?:overall\s+)?score[:\s]*(\d+\.?\d*)/i);
+    const score = scoreMatch ? parseFloat(scoreMatch[1]) : 0.5;
+
+    const shouldRetry = score < this.config.qualityThreshold;
+
+    let improvedPrompt = originalPrompt;
+    if (shouldRetry) {
+      improvedPrompt = `${originalPrompt}\n\n[Refinement: ${evalResponse.content}]`;
+    }
+
+    return {
+      shouldRetry,
+      improvedPrompt,
+      feedback: evalResponse.content,
+      qualityScore: score,
+    };
+  }
+}
+
+// ─── Tool Result Processor ───────────────────────────────────────────────────
+
+export class ToolResultProcessor {
+  static formatResults(results: ToolResult[]): string {
+    return results
+      .map((r) => {
+        if (r.error) {
+          return `Tool "${r.name}" error: ${r.error}`;
+        }
+        return `Tool "${r.name}" result: ${typeof r.result === "string" ? r.result : JSON.stringify(r.result)}`;
+      })
+      .join("\n\n");
+  }
+
+  static filterErrors(results: ToolResult[]): ToolResult[] {
+    return results.filter((r) => r.error);
+  }
+
+  static summarizeResults(results: ToolResult[]): {
+    successful: number;
+    failed: number;
+    totalLatencyMs: number;
+  } {
+    return {
+      successful: results.filter((r) => !r.error).length,
+      failed: results.filter((r) => r.error).length,
+      totalLatencyMs: results.reduce((sum, r) => sum + r.latencyMs, 0),
+    };
+  }
+}
+
+// ─── Agent ───────────────────────────────────────────────────────────────────
+
+export class Agent {
+  private config: AgentConfig;
+  private client: AIClient;
+  private registry: ToolRegistry;
+  private memory: AgentMemory;
+  private reflection: ReflectionEngine;
+
+  constructor(
+    config: AgentConfig,
+    client: AIClient,
+    toolRegistry?: ToolRegistry
+  ) {
+    this.config = {
+      temperature: 0.7,
+      maxTokens: 4096,
+      maxSteps: 10,
+      ...config,
+    };
+    this.client = client;
+    this.registry = toolRegistry ?? createDefaultToolRegistry();
+    this.memory = new AgentMemory(config.memory);
+    this.reflection = new ReflectionEngine(config.reflection);
+  }
+
+  async run(
     input: string,
-    options: {
-      tools?: ToolDefinition[];
-      toolExecutor?: (name: string, args: Record<string, unknown>) => Promise<unknown>;
-      maxIterations?: number;
-    } = {},
+    options: { context?: Record<string, unknown>; maxIterations?: number } = {}
   ): Promise<AgentResult> {
     const startTime = Date.now();
     const steps: AgentStep[] = [];
-    const maxIter = options.maxIterations ?? agent.maxSteps ?? this.maxSteps;
     let totalTokens = 0;
     let iterations = 0;
-    let response = '';
 
-    const messages: Array<{ role: string; content: string }> = [
-      { role: 'system', content: agent.systemPrompt || 'You are a helpful assistant.' },
-      { role: 'user', content: input },
-    ];
+    // Initialize memory with system prompt
+    this.memory.add({ role: "system", content: this.config.systemPrompt });
+    this.memory.add({ role: "user", content: input });
 
-    while (iterations < maxIter) {
+    const maxIterations = options.maxIterations ?? this.config.maxSteps ?? 10;
+
+    while (iterations < maxIterations) {
       iterations++;
-      const stepTokens = Math.floor(Math.random() * 200) + 50;
-      totalTokens += stepTokens;
 
-      if (totalTokens > this.maxTokens) {
-        steps.push({
-          stepNumber: iterations,
-          type: 'reasoning',
-          content: 'Max tokens reached, stopping.',
-          timestamp: new Date(),
-          tokens: stepTokens,
-        });
-        break;
-      }
+      const messages = this.memory.getMessages();
+      const tools = this.config.tools ?? this.registry.getDefinitions();
 
-      const shouldCallTool = options.tools && options.tools.length > 0 && iterations <= options.tools.length && Math.random() > 0.3;
+      // Step 1: Get LLM response
+      const response = await this.client.complete({
+        messages,
+        model: this.config.model,
+        provider: this.config.provider,
+        temperature: this.config.temperature,
+        maxTokens: this.config.maxTokens,
+        tools: tools.length > 0 ? tools : undefined,
+      });
 
-      if (shouldCallTool && options.tools && options.toolExecutor) {
-        const tool = options.tools[iterations - 1];
-        const toolCall: ToolCall = {
-          id: `call_${iterations}`,
-          type: 'function',
-          function: { name: tool.function.name, arguments: '{}' },
-        };
+      totalTokens += response.usage.totalTokens;
 
-        steps.push({
-          stepNumber: iterations,
-          type: 'tool_call',
-          content: `Calling tool: ${tool.function.name}`,
-          toolCalls: [toolCall],
-          timestamp: new Date(),
-          tokens: stepTokens,
-        });
+      steps.push({
+        stepNumber: iterations,
+        type: "reasoning",
+        content: response.content,
+        timestamp: new Date(),
+        tokens: response.usage.totalTokens,
+      });
 
-        try {
-          const result = await options.toolExecutor(tool.function.name, {});
-          const toolResult: ToolResult = {
-            toolCallId: toolCall.id,
-            name: tool.function.name,
-            result,
-            latencyMs: Math.floor(Math.random() * 100),
-          };
+      // Step 2: Check for tool calls
+      if (response.toolCalls && response.toolCalls.length > 0) {
+        const toolResults: ToolResult[] = [];
 
+        for (const toolCall of response.toolCalls) {
           steps.push({
-            stepNumber: iterations + 1,
-            type: 'tool_result',
-            content: JSON.stringify(result),
-            toolResults: [toolResult],
+            stepNumber: iterations,
+            type: "tool_call",
+            content: `Calling tool: ${toolCall.function.name}`,
+            toolCalls: [toolCall],
             timestamp: new Date(),
             tokens: 0,
           });
-          iterations++;
-        } catch (error) {
+
+          let args: Record<string, unknown>;
+          try {
+            args = JSON.parse(toolCall.function.arguments);
+          } catch {
+            args = {};
+          }
+
+          const result = await this.registry.execute(
+            toolCall.function.name,
+            args,
+            {
+              userId: "",
+              workspaceId: "",
+              variables: (options.context as Record<string, string>) ?? {},
+            }
+          );
+
+          result.toolCallId = toolCall.id;
+          toolResults.push(result);
+
           steps.push({
-            stepNumber: iterations + 1,
-            type: 'tool_result',
-            content: `Tool error: ${error instanceof Error ? error.message : String(error)}`,
-            toolResults: [{
-              toolCallId: toolCall.id,
-              name: tool.function.name,
-              result: null,
-              error: error instanceof Error ? error.message : String(error),
-              latencyMs: 0,
-            }],
+            stepNumber: iterations,
+            type: "tool_result",
+            content: ToolResultProcessor.formatResults([result]),
+            toolResults: [result],
             timestamp: new Date(),
             tokens: 0,
           });
-          iterations++;
+        }
+
+        // Add tool results to memory
+        this.memory.add({
+          role: "assistant",
+          content: response.content,
+          toolCalls: response.toolCalls,
+        });
+
+        const toolResultsContent = ToolResultProcessor.formatResults(toolResults);
+        this.memory.add({
+          role: "tool",
+          content: toolResultsContent,
+          toolCallId: response.toolCalls[0]?.id,
+        });
+
+        // Check if we should continue or return
+        const hasErrors = ToolResultProcessor.filterErrors(toolResults).length > 0;
+        if (hasErrors && iterations > 1) {
+          // On error after first tool call, try to handle it
+          continue;
         }
       } else {
-        response = `Agent response after ${iterations} iterations for: ${input}`;
-        steps.push({
-          stepNumber: iterations,
-          type: 'response',
-          content: response,
-          timestamp: new Date(),
-          tokens: stepTokens,
+        // No tool calls - this is the final response
+        this.memory.add({
+          role: "assistant",
+          content: response.content,
         });
-        break;
+
+        // Reflection loop
+        if (this.config.reflection?.enabled && iterations === 1) {
+          const reflection = await this.reflection.evaluate(
+            this.client,
+            input,
+            response.content
+          );
+
+          if (reflection.shouldRetry && iterations < maxIterations) {
+            steps.push({
+              stepNumber: iterations,
+              type: "reflection",
+              content: `Reflection feedback: ${reflection.feedback}`,
+              timestamp: new Date(),
+              tokens: 0,
+            });
+
+            this.memory.add({
+              role: "user",
+              content: `Please improve your response based on this feedback: ${reflection.feedback}`,
+            });
+            continue;
+          }
+        }
+
+        // Return final response
+        return {
+          agentId: this.config.id,
+          response: response.content,
+          steps,
+          totalTokens,
+          totalCost: response.usage.estimatedCost,
+          latencyMs: Date.now() - startTime,
+          iterations,
+        };
       }
     }
 
-    const costPerToken = 0.00001;
+    // Max iterations reached
+    const lastAssistantMsg = [...this.memory.getMessages()]
+      .reverse()
+      .find((m) => m.role === "assistant");
+
     return {
-      agentId: agent.id,
-      response,
+      agentId: this.config.id,
+      response: typeof lastAssistantMsg?.content === "string"
+        ? lastAssistantMsg.content
+        : "I was unable to complete the task within the allowed iterations.",
       steps,
       totalTokens,
-      totalCost: totalTokens * costPerToken,
+      totalCost: 0,
       latencyMs: Date.now() - startTime,
       iterations,
     };
   }
 
-  validateAgent(agent: AgentConfig): { valid: boolean; errors: string[] } {
-    const errors: string[] = [];
-    if (!agent.id) errors.push('Agent ID is required');
-    if (!agent.name) errors.push('Agent name is required');
-    if (!agent.systemPrompt && !agent.description) errors.push('Either systemPrompt or description is required');
-    if (agent.temperature !== undefined && (agent.temperature < 0 || agent.temperature > 2)) {
-      errors.push('Temperature must be between 0 and 2');
+  clearMemory(): void {
+    this.memory.clear();
+  }
+
+  getConfig(): AgentConfig {
+    return { ...this.config };
+  }
+}
+
+// ─── Agent Orchestrator ──────────────────────────────────────────────────────
+
+export interface OrchestratorConfig {
+  maxConcurrent: number;
+  defaultTimeout: number;
+  failoverStrategy: "skip" | "retry" | "fallback";
+}
+
+export class AgentOrchestrator {
+  private agents: Map<string, Agent> = new Map();
+  private config: OrchestratorConfig;
+
+  constructor(config: Partial<OrchestratorConfig> = {}) {
+    this.config = {
+      maxConcurrent: config.maxConcurrent ?? 5,
+      defaultTimeout: config.defaultTimeout ?? 60000,
+      failoverStrategy: config.failoverStrategy ?? "skip",
+    };
+  }
+
+  registerAgent(agent: Agent): void {
+    this.agents.set(agent.getConfig().id, agent);
+  }
+
+  unregisterAgent(agentId: string): void {
+    this.agents.delete(agentId);
+  }
+
+  async runAgent(
+    agentId: string,
+    input: string,
+    options?: { context?: Record<string, unknown> }
+  ): Promise<AgentResult> {
+    const agent = this.agents.get(agentId);
+    if (!agent) {
+      throw new Error(`Agent "${agentId}" not found`);
     }
-    if (agent.maxTokens !== undefined && (agent.maxTokens < 1 || agent.maxTokens > 128000)) {
-      errors.push('Max tokens must be between 1 and 128000');
+
+    return agent.run(input, options);
+  }
+
+  async runSequential(
+    agentIds: string[],
+    initialInput: string,
+    options?: { context?: Record<string, unknown> }
+  ): Promise<{ agentId: string; result: AgentResult }[]> {
+    const results: { agentId: string; result: AgentResult }[] = [];
+    let currentInput = initialInput;
+    const context = { ...options?.context };
+
+    for (const agentId of agentIds) {
+      try {
+        const result = await this.runAgent(agentId, currentInput, { context });
+        results.push({ agentId, result });
+
+        // Pass output as input to next agent
+        currentInput = result.response;
+        context.previousAgentOutput = result.response;
+      } catch (error) {
+        if (this.config.failoverStrategy === "skip") continue;
+        if (this.config.failoverStrategy === "retry") {
+          const result = await this.runAgent(agentId, currentInput, { context });
+          results.push({ agentId, result });
+          currentInput = result.response;
+        } else {
+          throw error;
+        }
+      }
     }
-    if (agent.tools) {
-      agent.tools.forEach((tool, i) => {
-        if (!tool.function?.name) errors.push(`Tool at index ${i} must have a name`);
+
+    return results;
+  }
+
+  async runParallel(
+    agentIds: string[],
+    input: string,
+    options?: { context?: Record<string, unknown> }
+  ): Promise<Map<string, AgentResult>> {
+    const results = new Map<string, AgentResult>();
+    const chunks: string[][] = [];
+
+    // Split into chunks based on max concurrent
+    for (let i = 0; i < agentIds.length; i += this.config.maxConcurrent) {
+      chunks.push(agentIds.slice(i, i + this.config.maxConcurrent));
+    }
+
+    for (const chunk of chunks) {
+      const promises = chunk.map(async (agentId) => {
+        try {
+          const result = await this.runAgent(agentId, input, options);
+          return { agentId, result };
+        } catch (error) {
+          if (this.config.failoverStrategy === "skip") {
+            return null;
+          }
+          throw error;
+        }
       });
+
+      const chunkResults = await Promise.all(promises);
+      for (const r of chunkResults) {
+        if (r) {
+          results.set(r.agentId, r.result);
+        }
+      }
     }
-    return { valid: errors.length === 0, errors };
+
+    return results;
   }
 
-  formatStepsForPrompt(steps: AgentStep[]): string {
-    return steps
-      .map((s) => `[Step ${s.stepNumber}] ${s.type}: ${s.content}`)
-      .join('\n');
+  async runPipeline(
+    steps: { agentId: string; input?: string | ((prevResult: AgentResult) => string) }[]
+  ): Promise<AgentResult[]> {
+    const results: AgentResult[] = [];
+    let currentInput = "";
+
+    for (const step of steps) {
+      const input = typeof step.input === "function"
+        ? step.input(results[results.length - 1])
+        : (step.input ?? currentInput);
+
+      const result = await this.runAgent(step.agentId, input);
+      results.push(result);
+      currentInput = result.response;
+    }
+
+    return results;
   }
 
-  calculateTotalCost(steps: AgentStep[], costPerToken: number = 0.00001): number {
-    return steps.reduce((sum, step) => sum + step.tokens * costPerToken, 0);
+  getAgentIds(): string[] {
+    return Array.from(this.agents.keys());
   }
+
+  hasAgent(agentId: string): boolean {
+    return this.agents.has(agentId);
+  }
+}
+
+// ─── Factory ─────────────────────────────────────────────────────────────────
+
+export function createAgent(
+  config: AgentConfig,
+  client: AIClient
+): Agent {
+  return new Agent(config, client);
+}
+
+export function createOrchestrator(
+  config?: Partial<OrchestratorConfig>
+): AgentOrchestrator {
+  return new AgentOrchestrator(config);
 }
