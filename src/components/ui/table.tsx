@@ -1,144 +1,257 @@
-import React, { useState, useMemo } from 'react';
+import * as React from "react";
+import { cn } from "@/lib/utils";
 
-export interface Column<T> {
+interface Column<T> {
   key: string;
-  header: string;
+  header: string | React.ReactNode;
   sortable?: boolean;
-  render?: (item: T, index: number) => React.ReactNode;
-  width?: string;
+  className?: string;
+  cellClassName?: string;
+  render?: (value: unknown, row: T, index: number) => React.ReactNode;
+  width?: string | number;
+  align?: "left" | "center" | "right";
 }
 
-export interface TableProps<T> {
-  data: T[];
+interface SortConfig {
+  key: string;
+  direction: "asc" | "desc";
+}
+
+interface DataTableProps<T extends Record<string, unknown>> {
   columns: Column<T>[];
-  keyExtractor: (item: T) => string;
-  onRowClick?: (item: T) => void;
-  pageSize?: number;
+  data: T[];
+  sortable?: boolean;
+  defaultSort?: SortConfig;
+  onSort?: (sort: SortConfig) => void;
+  selectable?: boolean;
+  selectedRows?: string[];
+  onSelectionChange?: (selectedRows: string[]) => void;
+  rowKey: keyof T | ((row: T) => string);
   emptyMessage?: string;
+  className?: string;
+  tableClassName?: string;
+  headerClassName?: string;
+  rowClassName?: string | ((row: T, index: number) => string);
+  onRowClick?: (row: T) => void;
+  pagination?: {
+    page: number;
+    pageSize: number;
+    total: number;
+    onPageChange: (page: number) => void;
+    onPageSizeChange?: (pageSize: number) => void;
+  };
   loading?: boolean;
 }
 
-export function Table<T extends Record<string, unknown>>({
-  data,
+function DataTable<T extends Record<string, unknown>>({
   columns,
-  keyExtractor,
+  data,
+  sortable = false,
+  defaultSort,
+  onSort,
+  selectable = false,
+  selectedRows = [],
+  onSelectionChange,
+  rowKey,
+  emptyMessage = "No data available",
+  className,
+  tableClassName,
+  headerClassName,
+  rowClassName,
   onRowClick,
-  pageSize = 10,
-  emptyMessage = 'No data available',
+  pagination,
   loading = false,
-}: TableProps<T>) {
-  const [sortKey, setSortKey] = useState<string | null>(null);
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [currentPage, setCurrentPage] = useState(1);
+}: DataTableProps<T>) {
+  const [sort, setSort] = React.useState<SortConfig | undefined>(defaultSort);
 
-  const sortedData = useMemo(() => {
-    if (!sortKey) return data;
-    return [...data].sort((a, b) => {
-      const aVal = a[sortKey];
-      const bVal = b[sortKey];
-      if (aVal === bVal) return 0;
-      if (aVal === null || aVal === undefined) return 1;
-      if (bVal === null || bVal === undefined) return -1;
-      const comparison = String(aVal).localeCompare(String(bVal));
-      return sortOrder === 'asc' ? comparison : -comparison;
-    });
-  }, [data, sortKey, sortOrder]);
-
-  const totalPages = Math.max(1, Math.ceil(data.length / pageSize));
-  const paginatedData = sortedData.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const getRowKey = (row: T): string => {
+    if (typeof rowKey === "function") return rowKey(row);
+    return String(row[rowKey]);
+  };
 
   const handleSort = (key: string) => {
-    if (sortKey === key) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    if (!sortable) return;
+    const newSort: SortConfig = {
+      key,
+      direction: sort?.key === key && sort.direction === "asc" ? "desc" : "asc",
+    };
+    setSort(newSort);
+    onSort?.(newSort);
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      onSelectionChange?.(data.map((row) => getRowKey(row)));
     } else {
-      setSortKey(key);
-      setSortOrder('asc');
+      onSelectionChange?.([]);
     }
   };
 
-  if (loading) {
-    return (
-      <div className="text-center py-8" data-testid="table-loading">
-        <p className="text-gray-500">Loading...</p>
-      </div>
-    );
-  }
+  const handleSelectRow = (key: string, checked: boolean) => {
+    if (checked) {
+      onSelectionChange?.([...selectedRows, key]);
+    } else {
+      onSelectionChange?.(selectedRows.filter((r) => r !== key));
+    }
+  };
 
-  if (data.length === 0) {
-    return (
-      <div className="text-center py-8" data-testid="table-empty">
-        <p className="text-gray-500">{emptyMessage}</p>
-      </div>
-    );
-  }
+  const allSelected = data.length > 0 && data.every((row) => selectedRows.includes(getRowKey(row)));
+  const someSelected = selectedRows.length > 0 && !allSelected;
 
   return (
-    <div>
-      <div className="overflow-x-auto">
-        <table className="min-w-full divide-y divide-gray-200" role="table">
-          <thead className="bg-gray-50">
+    <div className={cn("w-full", className)}>
+      <div className="relative overflow-auto rounded-md border scrollbar-thin">
+        <table className={cn("w-full caption-bottom text-sm", tableClassName)}>
+          <thead className={cn("[&_tr]:border-b", headerClassName)}>
             <tr>
+              {selectable && (
+                <th className="h-10 w-10 px-3 text-left">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    ref={(el) => {
+                      if (el) el.indeterminate = someSelected;
+                    }}
+                    onChange={(e) => handleSelectAll(e.target.checked)}
+                    className="h-4 w-4 rounded border-primary accent-primary"
+                  />
+                </th>
+              )}
               {columns.map((col) => (
                 <th
                   key={col.key}
-                  scope="col"
-                  className={`px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider ${col.sortable ? 'cursor-pointer select-none hover:bg-gray-100' : ''}`}
-                  onClick={col.sortable ? () => handleSort(col.key) : undefined}
+                  className={cn(
+                    "h-10 px-4 text-left font-medium text-muted-foreground",
+                    col.align === "center" && "text-center",
+                    col.align === "right" && "text-right",
+                    sortable && "cursor-pointer hover:text-foreground select-none",
+                    col.className
+                  )}
                   style={col.width ? { width: col.width } : undefined}
+                  onClick={() => col.sortable !== false && handleSort(col.key)}
                 >
-                  <span className="inline-flex items-center">
+                  <div className="flex items-center gap-1">
                     {col.header}
-                    {col.sortable && sortKey === col.key && (
-                      <span className="ml-1" data-testid="sort-indicator">
-                        {sortOrder === 'asc' ? '↑' : '↓'}
-                      </span>
+                    {sortable && col.sortable !== false && sort?.key === col.key && (
+                      <span className="text-xs">{sort.direction === "asc" ? "↑" : "↓"}</span>
                     )}
-                  </span>
+                  </div>
                 </th>
               ))}
             </tr>
           </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {paginatedData.map((item, index) => (
-              <tr
-                key={keyExtractor(item)}
-                onClick={onRowClick ? () => onRowClick(item) : undefined}
-                className={onRowClick ? 'cursor-pointer hover:bg-gray-50' : ''}
-                data-testid="table-row"
-              >
-                {columns.map((col) => (
-                  <td key={col.key} className="px-4 py-3 text-sm text-gray-900 whitespace-nowrap">
-                    {col.render ? col.render(item, (currentPage - 1) * pageSize + index) : String(item[col.key] ?? '')}
-                  </td>
-                ))}
+          <tbody className="[&_tr:last-child]:border-0">
+            {loading ? (
+              Array.from({ length: 5 }).map((_, i) => (
+                <tr key={i} className="border-b">
+                  {columns.map((col) => (
+                    <td key={col.key} className="p-4">
+                      <div className="h-4 w-full animate-pulse rounded bg-muted" />
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : data.length === 0 ? (
+              <tr>
+                <td
+                  colSpan={columns.length + (selectable ? 1 : 0)}
+                  className="h-24 text-center text-muted-foreground"
+                >
+                  {emptyMessage}
+                </td>
               </tr>
-            ))}
+            ) : (
+              data.map((row, rowIndex) => {
+                const key = getRowKey(row);
+                return (
+                  <tr
+                    key={key}
+                    className={cn(
+                      "border-b transition-colors hover:bg-muted/50",
+                      selectedRows.includes(key) && "bg-muted/50",
+                      onRowClick && "cursor-pointer",
+                      typeof rowClassName === "function"
+                        ? rowClassName(row, rowIndex)
+                        : rowClassName
+                    )}
+                    onClick={() => onRowClick?.(row)}
+                  >
+                    {selectable && (
+                      <td className="p-3" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedRows.includes(key)}
+                          onChange={(e) => handleSelectRow(key, e.target.checked)}
+                          className="h-4 w-4 rounded border-primary accent-primary"
+                        />
+                      </td>
+                    )}
+                    {columns.map((col) => (
+                      <td
+                        key={col.key}
+                        className={cn(
+                          "px-4 py-3",
+                          col.align === "center" && "text-center",
+                          col.align === "right" && "text-right",
+                          col.cellClassName
+                        )}
+                      >
+                        {col.render
+                          ? col.render(row[col.key], row, rowIndex)
+                          : String(row[col.key] ?? "")}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })
+            )}
           </tbody>
         </table>
       </div>
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200" data-testid="pagination">
-          <button
-            onClick={() => setCurrentPage(Math.max(1, currentPage - 1))}
-            disabled={currentPage === 1}
-            className="px-3 py-1 text-sm border rounded disabled:opacity-50"
-            data-testid="prev-page"
-          >
-            Previous
-          </button>
-          <span className="text-sm text-gray-700">
-            Page {currentPage} of {totalPages}
-          </span>
-          <button
-            onClick={() => setCurrentPage(Math.min(totalPages, currentPage + 1))}
-            disabled={currentPage === totalPages}
-            className="px-3 py-1 text-sm border rounded disabled:opacity-50"
-            data-testid="next-page"
-          >
-            Next
-          </button>
+      {pagination && (
+        <div className="flex items-center justify-between px-2 py-4">
+          <div className="text-sm text-muted-foreground">
+            Showing {Math.min((pagination.page - 1) * pagination.pageSize + 1, pagination.total)} to{" "}
+            {Math.min(pagination.page * pagination.pageSize, pagination.total)} of {pagination.total} results
+          </div>
+          <div className="flex items-center gap-2">
+            {pagination.onPageSizeChange && (
+              <select
+                value={pagination.pageSize}
+                onChange={(e) => pagination.onPageSizeChange?.(Number(e.target.value))}
+                className="h-8 rounded border bg-background px-2 text-sm"
+              >
+                {[10, 20, 50, 100].map((size) => (
+                  <option key={size} value={size}>
+                    {size} / page
+                  </option>
+                ))}
+              </select>
+            )}
+            <div className="flex gap-1">
+              <button
+                onClick={() => pagination.onPageChange(pagination.page - 1)}
+                disabled={pagination.page === 1}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border bg-background text-sm disabled:opacity-50"
+              >
+                ←
+              </button>
+              <span className="inline-flex h-8 items-center px-3 text-sm font-medium">
+                {pagination.page} / {Math.ceil(pagination.total / pagination.pageSize)}
+              </span>
+              <button
+                onClick={() => pagination.onPageChange(pagination.page + 1)}
+                disabled={pagination.page >= Math.ceil(pagination.total / pagination.pageSize)}
+                className="inline-flex h-8 w-8 items-center justify-center rounded border bg-background text-sm disabled:opacity-50"
+              >
+                →
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
   );
 }
+
+export { DataTable, type Column, type SortConfig };
