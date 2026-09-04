@@ -1,259 +1,244 @@
-// Workflow library barrel export
+/**
+ * Workflow Engine Module
+ * 
+ * Core module for the AI-Powered Enterprise Workflow Automation Platform.
+ * Provides workflow execution, triggers, actions, conditions, templates,
+ * scheduling, and orchestration capabilities.
+ * 
+ * @module workflow
+ */
 
-// ─── Types ───────────────────────────────────────────────
-export type WorkflowStatus = 'draft' | 'active' | 'paused' | 'archived';
-export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-export type TriggerType = 'manual' | 'webhook' | 'schedule' | 'event' | 'cron';
+// ─── Core Engine ────────────────────────────────────────────────────────────
 
-export interface WorkflowStep {
-  id: string;
-  name: string;
-  type: string;
-  config: Record<string, unknown>;
-  next?: string[];
-  condition?: string;
-  onError?: 'stop' | 'continue' | 'retry';
-  retryPolicy?: { maxAttempts: number; delayMs: number };
-}
+export {
+  WorkflowEngine,
+  WorkflowError,
+  WorkflowValidationError,
+  WorkflowTimeoutError,
+} from './engine';
 
-export interface Workflow {
-  id: string;
-  name: string;
-  description?: string;
-  status: WorkflowStatus;
-  trigger: { type: TriggerType; config: Record<string, unknown> };
-  steps: WorkflowStep[];
-  variables?: Record<string, unknown>;
-  tags?: string[];
-  version: number;
-  createdAt: Date;
-  updatedAt: Date;
-}
+export type {
+  StepType,
+  StepStatus,
+  WorkflowStatus,
+  RetryConfig,
+  TimeoutConfig,
+  WorkflowStep,
+  ConditionDefinition,
+  ComparisonCondition,
+  ErrorHandlerConfig,
+  NotificationConfig,
+  WorkflowDefinition,
+  TriggerDefinition,
+  ExecutionContext,
+  SystemVariables,
+  StepState,
+  WorkflowError as WorkflowErrorType,
+  ExecutionTraceEntry,
+  ExecutionResult,
+  StepExecutionResult,
+  ExecutionOptions,
+  ExecutionProgress,
+  ExecutionPlan,
+  ValidationResult,
+  ValidationError,
+} from './engine';
 
-export interface WorkflowExecution {
-  id: string;
-  workflowId: string;
-  status: StepStatus;
-  input?: Record<string, unknown>;
-  output?: Record<string, unknown>;
-  stepResults: Map<string, StepResult>;
-  startedAt: Date;
-  completedAt?: Date;
-  error?: string;
-}
+// ─── Triggers ───────────────────────────────────────────────────────────────
 
-export interface StepResult {
-  stepId: string;
-  status: StepStatus;
-  input?: unknown;
-  output?: unknown;
-  error?: string;
-  startedAt: Date;
-  completedAt?: Date;
-  durationMs?: number;
-}
+export {
+  TriggerManager,
+  EmailParser,
+  DatabaseTrigger,
+  FileTrigger,
+  PaymentTrigger,
+} from './triggers';
 
-export interface ExecutionContext {
-  workflow: Workflow;
-  execution: WorkflowExecution;
-  variables: Record<string, unknown>;
-  stepResults: Map<string, StepResult>;
-}
+export type {
+  TriggerType,
+  TriggerContext,
+  TriggerResult,
+  WebhookTriggerConfig,
+  WebhookAuth,
+  RateLimitConfig,
+  CorsConfig,
+  WebhookRequest,
+  CronTriggerConfig,
+  EventTriggerConfig,
+  EventFilter,
+  PollTriggerConfig,
+  PollComparison,
+  PollCredentials,
+  EmailTriggerConfig,
+  TriggerRegistration,
+  TriggerEvent,
+  TriggerStats,
+  ParsedEmail,
+  EmailAddress,
+  EmailAttachment,
+} from './triggers';
 
-// ─── Step Executor Registry ──────────────────────────────
-type StepExecutor = (step: WorkflowStep, context: ExecutionContext) => Promise<unknown>;
+// ─── Actions ────────────────────────────────────────────────────────────────
 
-const executors = new Map<string, StepExecutor>();
+export {
+  ActionRegistry,
+  HttpAction,
+  EmailAction,
+  DatabaseAction,
+  DelayAction,
+  CodeAction,
+  TransformAction,
+  ConditionAction,
+  LoopAction,
+  AiTextAction,
+  AiImageAction,
+  FileAction,
+  NotificationAction,
+  StripeAction,
+  QrCodeAction,
+  PdfAction,
+} from './actions';
 
-export function registerStepExecutor(type: string, executor: StepExecutor): void {
-  executors.set(type, executor);
-}
+export type {
+  ActionType,
+  HttpMethod,
+  ActionConfig,
+  HttpRequestConfig,
+  HttpAuth,
+  EmailSendConfig,
+  EmailAttachment as ActionEmailAttachment,
+  DatabaseConfig,
+  DelayConfig,
+  CodeConfig,
+  TransformConfig,
+  LoopConfig,
+  AiTextConfig,
+  AiImageConfig,
+  FileConfig,
+  NotificationConfig as ActionNotificationConfig,
+  NotificationAttachment,
+  StripeConfig,
+  QrCodeConfig,
+  PdfConfig,
+  PdfOptions,
+  ActionExecutor,
+  HttpResponse,
+  EmailResult,
+  EmailMessage,
+  DatabaseResult,
+  DelayResult,
+  CodeResult,
+  TransformResult,
+  ConditionActionResult,
+  LoopResult,
+  AiTextResult,
+  AiImageResult,
+  FileResult,
+  NotificationResult,
+  StripeResult,
+  QrCodeResult,
+  PdfResult,
+} from './actions';
 
-// ─── Workflow Engine ─────────────────────────────────────
-class WorkflowEngine {
-  private executions = new Map<string, WorkflowExecution>();
+// ─── Conditions ─────────────────────────────────────────────────────────────
 
-  async execute(
-    workflow: Workflow,
-    input?: Record<string, unknown>
-  ): Promise<WorkflowExecution> {
-    const execution: WorkflowExecution = {
-      id: `exec_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-      workflowId: workflow.id,
-      status: 'running',
-      input,
-      stepResults: new Map(),
-      startedAt: new Date(),
-    };
+export {
+  ConditionEvaluator,
+  ConditionPresets,
+  ExpressionEvaluator,
+} from './conditions';
 
-    this.executions.set(execution.id, execution);
+export type {
+  ComparisonOperator,
+  LogicalOperator,
+  StringOperator,
+  ArrayOperator,
+  DateOperator,
+  NullOperator,
+  OperatorType,
+  ConditionContext,
+  ConditionResult,
+  ConditionDetail,
+} from './conditions';
 
-    const context: ExecutionContext = {
-      workflow,
-      execution,
-      variables: { ...workflow.variables, ...input },
-      stepResults: execution.stepResults,
-    };
+// ─── Variables ──────────────────────────────────────────────────────────────
 
-    try {
-      for (const step of workflow.steps) {
-        if (execution.status === 'failed') break;
+export {
+  VariableResolver,
+  VariableTransformer,
+  VariableValidator,
+  TemplateEngine,
+  SecretManager,
+} from './variables';
 
-        const result = await this.executeStep(step, context);
-        execution.stepResults.set(step.id, result);
+export type {
+  VariableType,
+  Variable,
+  VariableSet,
+  InterpolationResult,
+  VariableReference,
+  EncryptedVariable,
+  ValidationResult as VariableValidationResult,
+  AllValidationResults,
+  TemplateOptions,
+  TemplateResult,
+} from './variables';
 
-        if (result.status === 'failed') {
-          execution.status = 'failed';
-          execution.error = result.error;
-          break;
-        }
+// ─── Templates ──────────────────────────────────────────────────────────────
 
-        // Store step output in variables for subsequent steps
-        context.variables[`${step.id}_output`] = result.output;
-      }
+export {
+  TemplateRegistry,
+} from './templates';
 
-      if (execution.status === 'running') {
-        execution.status = 'completed';
-        execution.output = this.collectOutputs(context);
-      }
-    } catch (error) {
-      execution.status = 'failed';
-      execution.error = error instanceof Error ? error.message : String(error);
-    } finally {
-      execution.completedAt = new Date();
-    }
+export type {
+  TemplateCategory,
+  WorkflowTemplate,
+  TemplateSearchResult,
+} from './templates';
 
-    return execution;
-  }
+// ─── Scheduler ──────────────────────────────────────────────────────────────
 
-  private async executeStep(step: WorkflowStep, context: ExecutionContext): Promise<StepResult> {
-    const result: StepResult = {
-      stepId: step.id,
-      status: 'running',
-      startedAt: new Date(),
-    };
+export {
+  CronScheduler,
+  CronParser,
+  TimezoneUtils,
+  HolidayCalendar,
+  CronParseError,
+} from './scheduler';
 
-    try {
-      const executor = executors.get(step.type);
-      if (!executor) {
-        throw new Error(`No executor registered for step type: ${step.type}`);
-      }
+export type {
+  SchedulerStatus,
+  ScheduledJob,
+  JobConfig,
+  JobRetryConfig,
+  JobExecution,
+  SchedulerStats,
+  ScheduledJobHandler,
+  JobContext,
+  ValidationResult as CronValidationResult,
+} from './scheduler';
 
-      // Evaluate condition if present
-      if (step.condition) {
-        const conditionMet = this.evaluateCondition(step.condition, context);
-        if (!conditionMet) {
-          result.status = 'skipped';
-          result.completedAt = new Date();
-          return result;
-        }
-      }
+// ─── Executor ───────────────────────────────────────────────────────────────
 
-      result.input = step.config;
-      result.output = await executor(step, context);
-      result.status = 'completed';
-    } catch (error) {
-      result.status = 'failed';
-      result.error = error instanceof Error ? error.message : String(error);
+export {
+  ExecutionOrchestrator,
+  QueueManager,
+  Worker,
+  ResultAggregator,
+  ExecutionMonitor,
+} from './executor';
 
-      if (step.onError === 'retry' && step.retryPolicy) {
-        for (let attempt = 1; attempt < step.retryPolicy.maxAttempts; attempt++) {
-          await new Promise((r) => setTimeout(r, step.retryPolicy!.delayMs));
-          try {
-            const executor = executors.get(step.type)!;
-            result.output = await executor(step, context);
-            result.status = 'completed';
-            result.error = undefined;
-            break;
-          } catch {
-            if (attempt === step.retryPolicy.maxAttempts - 1) {
-              result.error = error instanceof Error ? error.message : String(error);
-            }
-          }
-        }
-      }
-    } finally {
-      result.completedAt = new Date();
-      result.durationMs = result.completedAt.getTime() - result.startedAt.getTime();
-    }
-
-    return result;
-  }
-
-  private evaluateCondition(condition: string, context: ExecutionContext): boolean {
-    // Simple condition evaluation: check if variable is truthy
-    const value = context.variables[condition];
-    return !!value;
-  }
-
-  private collectOutputs(context: ExecutionContext): Record<string, unknown> {
-    const outputs: Record<string, unknown> = {};
-    for (const [stepId, result] of context.stepResults) {
-      outputs[stepId] = result.output;
-    }
-    return outputs;
-  }
-
-  getExecution(id: string): WorkflowExecution | undefined {
-    return this.executions.get(id);
-  }
-
-  listExecutions(workflowId?: string): WorkflowExecution[] {
-    const executions = Array.from(this.executions.values());
-    return workflowId ? executions.filter((e) => e.workflowId === workflowId) : executions;
-  }
-}
-
-// ─── Singleton ───────────────────────────────────────────
-const globalEngine = globalThis as unknown as { __workflowEngine?: WorkflowEngine };
-export const workflowEngine = globalEngine.__workflowEngine || new WorkflowEngine();
-if (process.env.NODE_ENV !== 'production') {
-  globalEngine.__workflowEngine = workflowEngine;
-}
-
-// ─── Built-in Step Executors ─────────────────────────────
-registerStepExecutor('http-request', async (step) => {
-  const { url, method = 'GET', headers = {}, body } = step.config as { url: string; method?: string; headers?: Record<string, string>; body?: unknown };
-  const response = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
-  return { status: response.status, data: await response.json() };
-});
-
-registerStepExecutor('transform', async (step, context) => {
-  const { expression } = step.config as { expression: string };
-  // Simple expression evaluation
-  return { result: expression };
-});
-
-registerStepExecutor('condition', async (step, context) => {
-  const { field, operator, value } = step.config as { field: string; operator: string; value: unknown };
-  const fieldValue = context.variables[field];
-  let result = false;
-
-  switch (operator) {
-    case 'eq': result = fieldValue === value; break;
-    case 'neq': result = fieldValue !== value; break;
-    case 'gt': result = Number(fieldValue) > Number(value); break;
-    case 'lt': result = Number(fieldValue) < Number(value); break;
-    case 'contains': result = String(fieldValue).includes(String(value)); break;
-  }
-
-  return { result };
-});
-
-registerStepExecutor('delay', async (step) => {
-  const { durationMs = 1000 } = step.config as { durationMs?: number };
-  await new Promise((r) => setTimeout(r, durationMs));
-  return { delayed: durationMs };
-});
-
-// ─── Convenience Functions ───────────────────────────────
-export async function executeWorkflow(
-  workflow: Workflow,
-  input?: Record<string, unknown>
-): Promise<WorkflowExecution> {
-  return workflowEngine.execute(workflow, input);
-}
-
-export function getExecution(id: string): WorkflowExecution | undefined {
-  return workflowEngine.getExecution(id);
-}
+export type {
+  ExecutorConfig,
+  RedisConfig,
+  ExecutionRequest,
+  JobPriority,
+  ExecutionMetadata,
+  ExecutionProgress as ExecutorExecutionProgress,
+  WorkerStats,
+  QueueStats,
+  ExecutionMetrics,
+  AggregatedResults,
+  ExecutionListener,
+  MonitorStatus,
+} from './executor';

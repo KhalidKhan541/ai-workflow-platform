@@ -1,127 +1,207 @@
-import React, { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import * as React from "react";
+import { cn } from "@/lib/utils";
+import { Send, Bot, User, Copy, Check, Loader2, Square, Paperclip, Mic, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { MarkdownRenderer } from "./markdown-renderer";
 
-export interface ChatMessage {
+interface Message {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: "user" | "assistant" | "system";
   content: string;
   timestamp: Date;
-  toolCalls?: Array<{ name: string; result: string }>;
-}
-
-export interface ChatInterfaceProps {
-  messages: ChatMessage[];
-  onSendMessage: (message: string) => void;
-  onToolCall?: (toolName: string, args: Record<string, unknown>) => void;
   loading?: boolean;
-  disabled?: boolean;
-  placeholder?: string;
+  error?: string;
 }
 
-export function ChatInterface({
+interface ChatInterfaceProps {
+  messages: Message[];
+  onSendMessage: (message: string) => void;
+  onStopGeneration?: () => void;
+  onCopyMessage?: (content: string) => void;
+  onRegenerate?: (messageId: string) => void;
+  isLoading?: boolean;
+  placeholder?: string;
+  showAvatar?: boolean;
+  userAvatar?: string;
+  assistantAvatar?: string;
+  className?: string;
+}
+
+function ChatInterface({
   messages,
   onSendMessage,
-  loading = false,
-  disabled = false,
-  placeholder = 'Type your message...',
+  onStopGeneration,
+  onCopyMessage,
+  onRegenerate,
+  isLoading = false,
+  placeholder = "Type your message...",
+  showAvatar = true,
+  userAvatar,
+  assistantAvatar,
+  className,
 }: ChatInterfaceProps) {
-  const [input, setInput] = useState('');
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [input, setInput] = React.useState("");
+  const [copiedId, setCopiedId] = React.useState<string | null>(null);
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const textareaRef = React.useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  React.useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
   }, [messages]);
 
-  const handleSend = () => {
+  const handleSubmit = () => {
     const trimmed = input.trim();
-    if (!trimmed || disabled || loading) return;
+    if (!trimmed || isLoading) return;
     onSendMessage(trimmed);
-    setInput('');
+    setInput("");
   };
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSend();
+      handleSubmit();
     }
   };
 
+  const handleCopy = async (content: string, id: string) => {
+    await navigator.clipboard.writeText(content);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+    onCopyMessage?.(content);
+  };
+
   return (
-    <div className="flex flex-col h-full border rounded-lg overflow-hidden" data-testid="chat-interface">
-      <div className="flex-1 overflow-y-auto p-4 space-y-4" data-testid="messages-container">
-        {messages.length === 0 && (
-          <div className="text-center text-gray-500 py-8" data-testid="empty-state">
-            <p>No messages yet. Start a conversation!</p>
-          </div>
-        )}
-        {messages.map((msg) => (
-          <div
-            key={msg.id}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            data-testid="message"
-          >
+    <div className={cn("flex flex-col h-full", className)}>
+      <ScrollArea ref={scrollRef} className="flex-1 p-4">
+        <div className="max-w-3xl mx-auto space-y-6">
+          {messages.length === 0 && (
+            <div className="flex flex-col items-center justify-center h-64 text-center">
+              <Bot className="h-12 w-12 text-muted-foreground mb-4" />
+              <p className="text-lg font-medium">How can I help you today?</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Ask me anything about your workflows, data, or processes.
+              </p>
+            </div>
+          )}
+          {messages.map((message) => (
             <div
-              className={`max-w-[70%] rounded-lg px-4 py-2 ${
-                msg.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : msg.role === 'assistant'
-                  ? 'bg-gray-100 text-gray-900'
-                  : 'bg-yellow-50 text-yellow-800 border border-yellow-200'
-              }`}
-            >
-              <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
-              {msg.toolCalls && msg.toolCalls.length > 0 && (
-                <div className="mt-2 border-t border-gray-200 pt-2 space-y-1" data-testid="tool-calls">
-                  {msg.toolCalls.map((tc, i) => (
-                    <div key={i} className="text-xs bg-white bg-opacity-20 rounded p-1">
-                      <span className="font-mono">{tc.name}</span>
-                      <span className="opacity-75 ml-1">→ {tc.result}</span>
-                    </div>
-                  ))}
-                </div>
+              key={message.id}
+              className={cn(
+                "flex gap-3 group",
+                message.role === "user" ? "justify-end" : "justify-start"
               )}
-              <div className="text-xs opacity-60 mt-1">
-                {msg.timestamp.toLocaleTimeString()}
+            >
+              {message.role === "assistant" && showAvatar && (
+                <Avatar size="sm" className="mt-0.5">
+                  {assistantAvatar && <AvatarImage src={assistantAvatar} />}
+                  <AvatarFallback>
+                    <Bot className="h-4 w-4" />
+                  </AvatarFallback>
+                </Avatar>
+              )}
+              <div
+                className={cn(
+                  "max-w-[80%] rounded-xl px-4 py-3",
+                  message.role === "user"
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted",
+                  message.error && "border border-destructive"
+                )}
+              >
+                {message.role === "assistant" ? (
+                  <MarkdownRenderer content={message.content} />
+                ) : (
+                  <p className="whitespace-pre-wrap text-sm">{message.content}</p>
+                )}
+                {message.loading && (
+                  <div className="flex items-center gap-2 mt-2 text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="text-xs">Thinking...</span>
+                  </div>
+                )}
+                {message.error && (
+                  <p className="text-xs text-destructive mt-2">{message.error}</p>
+                )}
+                <div className="flex items-center gap-2 mt-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <span className="text-[10px] text-muted-foreground">
+                    {message.timestamp.toLocaleTimeString()}
+                  </span>
+                  <button
+                    onClick={() => handleCopy(message.content, message.id)}
+                    className="rounded p-1 hover:bg-background/20 transition-colors"
+                  >
+                    {copiedId === message.id ? (
+                      <Check className="h-3 w-3" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )}
+                  </button>
+                  {message.role === "assistant" && !message.loading && onRegenerate && (
+                    <button
+                      onClick={() => onRegenerate(message.id)}
+                      className="rounded p-1 hover:bg-background/20 transition-colors"
+                    >
+                      <RefreshCw className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
               </div>
+              {message.role === "user" && showAvatar && (
+                <Avatar size="sm" className="mt-0.5">
+                  {userAvatar && <AvatarImage src={userAvatar} />}
+                  <AvatarFallback>
+                    <User className="h-4 w-4" />
+                  </AvatarFallback>
+                </Avatar>
+              )}
+            </div>
+          ))}
+        </div>
+      </ScrollArea>
+      <div className="border-t p-4">
+        <div className="max-w-3xl mx-auto">
+          <div className="relative flex items-end gap-2">
+            <Button variant="ghost" size="icon" className="flex-shrink-0 mb-1">
+              <Paperclip className="h-4 w-4" />
+            </Button>
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={placeholder}
+              autoResize
+              rows={1}
+              className="min-h-[44px] max-h-[200px] resize-none pr-24"
+            />
+            <div className="absolute right-2 bottom-2 flex items-center gap-1">
+              {isLoading && onStopGeneration ? (
+                <Button size="icon" variant="destructive" onClick={onStopGeneration}>
+                  <Square className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  size="icon"
+                  onClick={handleSubmit}
+                  disabled={!input.trim() || isLoading}
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              )}
             </div>
           </div>
-        ))}
-        {loading && (
-          <div className="flex justify-start" data-testid="loading-indicator">
-            <div className="bg-gray-100 rounded-lg px-4 py-2">
-              <div className="flex gap-1">
-                <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-              </div>
-            </div>
-          </div>
-        )}
-        <div ref={messagesEndRef} />
-      </div>
-      <div className="border-t p-3 bg-gray-50">
-        <div className="flex gap-2">
-          <textarea
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={placeholder}
-            disabled={disabled || loading}
-            rows={1}
-            className="flex-1 resize-none rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
-            data-testid="chat-input"
-          />
-          <button
-            onClick={handleSend}
-            disabled={disabled || loading || !input.trim()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-            data-testid="send-button"
-          >
-            Send
-          </button>
+          <p className="text-[10px] text-muted-foreground text-center mt-2">
+            Press Enter to send, Shift+Enter for new line
+          </p>
         </div>
       </div>
     </div>
   );
 }
+
+export { ChatInterface, type Message };

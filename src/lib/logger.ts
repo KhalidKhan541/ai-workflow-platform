@@ -1,30 +1,29 @@
-import { config } from "./config";
+/**
+ * Logger Module
+ * 
+ * Centralized logging utility for the application.
+ * Provides structured logging with different levels and contexts.
+ * 
+ * @module lib/logger
+ */
 
-type LogLevel = "debug" | "info" | "warn" | "error";
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-interface LogContext {
-  requestId?: string;
-  userId?: string;
-  orgId?: string;
-  action?: string;
-  resource?: string;
-  resourceId?: string;
-  duration?: number;
-  statusCode?: number;
-  method?: string;
-  path?: string;
-  ip?: string;
-  userAgent?: string;
-  [key: string]: unknown;
-}
-
-interface LogEntry {
+export interface LogEntry {
   level: LogLevel;
   message: string;
-  context?: LogContext;
-  timestamp: string;
-  source?: string;
-  stack?: string;
+  timestamp: Date;
+  context?: string;
+  metadata?: Record<string, unknown>;
+  error?: Error;
+}
+
+export interface LoggerConfig {
+  level: LogLevel;
+  format: 'json' | 'text';
+  enableConsole: boolean;
+  enableFile: boolean;
+  filePath?: string;
 }
 
 const LOG_LEVELS: Record<LogLevel, number> = {
@@ -34,264 +33,114 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
-const COLORS: Record<LogLevel, string> = {
-  debug: "\x1b[36m",
-  info: "\x1b[32m",
-  warn: "\x1b[33m",
-  error: "\x1b[31m",
-};
-
-const RESET = "\x1b[0m";
-const BOLD = "\x1b[1m";
-const DIM = "\x1b[2m";
-
+/**
+ * Simple logger implementation.
+ * In production, replace with a proper logging library like Winston or Pino.
+ */
 class Logger {
-  private minLevel: LogLevel;
-  private isDevelopment: boolean;
+  private config: LoggerConfig;
+  private context?: string;
 
-  constructor(minLevel: LogLevel = "info") {
-    this.minLevel = minLevel;
-    this.isDevelopment = config.app.isDev;
-  }
-
-  private shouldLog(level: LogLevel): boolean {
-    return LOG_LEVELS[level] >= LOG_LEVELS[this.minLevel];
-  }
-
-  private formatEntry(entry: LogEntry): string {
-    if (this.isDevelopment) {
-      return this.formatDevelopment(entry);
-    }
-    return this.formatProduction(entry);
-  }
-
-  private formatDevelopment(entry: LogEntry): string {
-    const color = COLORS[entry.level];
-    const timestamp = new Date(entry.timestamp).toLocaleTimeString();
-    const levelStr = entry.level.toUpperCase().padEnd(5);
-    const prefix = entry.source ? `[${entry.source}]` : "";
-
-    let output = `${DIM}${timestamp}${RESET} ${color}${BOLD}${levelStr}${RESET} ${prefix} ${entry.message}`;
-
-    if (entry.context && Object.keys(entry.context).length > 0) {
-      const contextStr = Object.entries(entry.context)
-        .filter(([, v]) => v !== undefined && v !== null)
-        .map(([k, v]) => {
-          if (typeof v === "object") {
-            return `${k}=${JSON.stringify(v)}`;
-          }
-          return `${k}=${v}`;
-        })
-        .join(" ");
-      output += `\n  ${DIM}${contextStr}${RESET}`;
-    }
-
-    if (entry.stack) {
-      output += `\n  ${DIM}Stack:${RESET}\n${entry.stack}`;
-    }
-
-    return output;
-  }
-
-  private formatProduction(entry: LogEntry): string {
-    const logEntry: Record<string, unknown> = {
-      timestamp: entry.timestamp,
-      level: entry.level,
-      message: entry.message,
-      source: entry.source,
+  constructor(config: Partial<LoggerConfig> = {}, context?: string) {
+    this.config = {
+      level: 'info',
+      format: 'json',
+      enableConsole: true,
+      enableFile: false,
+      ...config,
     };
-
-    if (entry.context && Object.keys(entry.context).length > 0) {
-      logEntry.context = entry.context;
-    }
-
-    if (entry.stack) {
-      logEntry.stack = entry.stack;
-    }
-
-    return JSON.stringify(logEntry);
+    this.context = context;
   }
 
-  private log(level: LogLevel, message: string, context?: LogContext, source?: string): void {
-    if (!this.shouldLog(level)) return;
+  /**
+   * Create a child logger with context.
+   */
+  child(context: string): Logger {
+    return new Logger(this.config, context);
+  }
+
+  /**
+   * Log a debug message.
+   */
+  debug(message: string, metadata?: Record<string, unknown>): void {
+    this.log('debug', message, metadata);
+  }
+
+  /**
+   * Log an info message.
+   */
+  info(message: string, metadata?: Record<string, unknown>): void {
+    this.log('info', message, metadata);
+  }
+
+  /**
+   * Log a warning message.
+   */
+  warn(message: string, metadata?: Record<string, unknown>): void {
+    this.log('warn', message, metadata);
+  }
+
+  /**
+   * Log an error message.
+   */
+  error(message: string, metadata?: Record<string, unknown>): void {
+    this.log('error', message, metadata);
+  }
+
+  private log(level: LogLevel, message: string, metadata?: Record<string, unknown>): void {
+    if (LOG_LEVELS[level] < LOG_LEVELS[this.config.level]) {
+      return;
+    }
 
     const entry: LogEntry = {
       level,
       message,
-      context,
-      timestamp: new Date().toISOString(),
-      source,
-      stack: level === "error" ? new Error().stack : undefined,
+      timestamp: new Date(),
+      context: this.context,
+      metadata,
     };
 
-    const formatted = this.formatEntry(entry);
-
-    switch (level) {
-      case "debug":
-        console.debug(formatted);
-        break;
-      case "info":
-        console.info(formatted);
-        break;
-      case "warn":
-        console.warn(formatted);
-        break;
-      case "error":
-        console.error(formatted);
-        break;
+    if (this.config.enableConsole) {
+      this.outputToConsole(entry);
     }
   }
 
-  debug(message: string, context?: LogContext, source?: string): void {
-    this.log("debug", message, context, source);
-  }
+  private outputToConsole(entry: LogEntry): void {
+    const timestamp = entry.timestamp.toISOString();
+    const context = entry.context ? `[${entry.context}]` : '';
+    const prefix = `${timestamp} ${entry.level.toUpperCase()} ${context}`;
 
-  info(message: string, context?: LogContext, source?: string): void {
-    this.log("info", message, context, source);
-  }
-
-  warn(message: string, context?: LogContext, source?: string): void {
-    this.log("warn", message, context, source);
-  }
-
-  error(message: string, context?: LogContext, source?: string): void {
-    this.log("error", message, context, source);
-  }
-
-  child(source: string): ChildLogger {
-    return new ChildLogger(this, source);
-  }
-
-  setLevel(level: LogLevel): void {
-    this.minLevel = level;
+    switch (entry.level) {
+      case 'debug':
+        console.debug(prefix, entry.message, entry.metadata || '');
+        break;
+      case 'info':
+        console.info(prefix, entry.message, entry.metadata || '');
+        break;
+      case 'warn':
+        console.warn(prefix, entry.message, entry.metadata || '');
+        break;
+      case 'error':
+        console.error(prefix, entry.message, entry.metadata || '');
+        break;
+    }
   }
 }
 
-class ChildLogger {
-  private parent: Logger;
-  private source: string;
+/**
+ * Default logger instance.
+ */
+export const logger = new Logger({
+  level: (process.env.LOG_LEVEL as LogLevel) || 'info',
+  format: 'json',
+  enableConsole: true,
+});
 
-  constructor(parent: Logger, source: string) {
-    this.parent = parent;
-    this.source = source;
-  }
-
-  debug(message: string, context?: LogContext): void {
-    this.parent.debug(message, context, this.source);
-  }
-
-  info(message: string, context?: LogContext): void {
-    this.parent.info(message, context, this.source);
-  }
-
-  warn(message: string, context?: LogContext): void {
-    this.parent.warn(message, context, this.source);
-  }
-
-  error(message: string, context?: LogContext): void {
-    this.parent.error(message, context, this.source);
-  }
+/**
+ * Create a logger with context.
+ */
+export function createLogger(context: string): Logger {
+  return logger.child(context);
 }
 
-function createLogger(): Logger {
-  const level = (config.logging.level as LogLevel) || "info";
-  return new Logger(level);
-}
-
-export const logger = createLogger();
-
-export function createRequestLogger(requestId: string): ChildLogger {
-  return logger.child(`req:${requestId.substring(0, 8)}`);
-}
-
-export function generateRequestId(): string {
-  return `req_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
-}
-
-export function logApiRequest(
-  method: string,
-  path: string,
-  requestId: string,
-  context?: LogContext
-): void {
-  logger.info("API Request", {
-    method,
-    path,
-    requestId,
-    ...context,
-  });
-}
-
-export function logApiResponse(
-  method: string,
-  path: string,
-  statusCode: number,
-  duration: number,
-  requestId: string
-): void {
-  const level: LogLevel = statusCode >= 500 ? "error" : statusCode >= 400 ? "warn" : "info";
-  logger[level]("API Response", {
-    method,
-    path,
-    statusCode,
-    duration,
-    requestId,
-  });
-}
-
-export function logError(
-  error: Error,
-  context?: LogContext,
-  source?: string
-): void {
-  logger.error(error.message, {
-    ...context,
-    stack: error.stack,
-  }, source);
-}
-
-export function logAudit(
-  action: string,
-  resource: string,
-  resourceId: string,
-  userId: string,
-  orgId: string,
-  details?: Record<string, unknown>
-): void {
-  logger.info("Audit", {
-    action,
-    resource,
-    resourceId,
-    userId,
-    orgId,
-    ...details,
-  }, "audit");
-}
-
-export function logPerformance(
-  operation: string,
-  durationMs: number,
-  context?: LogContext
-): void {
-  const level: LogLevel = durationMs > 1000 ? "warn" : "debug";
-  logger[level](`Performance: ${operation}`, {
-    duration: durationMs,
-    ...context,
-  }, "perf");
-}
-
-export function createTimer(label: string): {
-  stop: (context?: LogContext) => number;
-} {
-  const start = performance.now();
-  return {
-    stop: (context?: LogContext) => {
-      const duration = Math.round(performance.now() - start);
-      logPerformance(label, duration, context);
-      return duration;
-    },
-  };
-}
-
-export { Logger, ChildLogger };
-export type { LogLevel, LogContext, LogEntry };
+export default logger;
