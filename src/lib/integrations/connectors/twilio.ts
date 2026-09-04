@@ -218,8 +218,8 @@ export class TwilioIntegration extends BaseIntegration {
     if (options?.to) params.To = options.to;
     if (options?.from) params.From = options.from;
     if (options?.dateSent) params.DateSent = options.dateSent;
-    if (options?.dateSentBefore) params.DateSent< = options.dateSentBefore;
-    if (options?.dateSentAfter) params.DateSent>= = options.dateSentAfter;
+    if (options?.dateSentBefore) params.DateSentBefore = options.dateSentBefore;
+    if (options?.dateSentAfter) params.DateSentAfter = options.dateSentAfter;
     if (options?.limit) params.PageSize = String(options.limit);
     if (options?.pageToken) params.PageToken = options.pageToken;
     return this.get('/Messages.json', params);
